@@ -21,6 +21,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	awsCreds "github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+    manager "github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 )
 
 var QiniuConfig struct {
@@ -132,45 +133,61 @@ func (c *ctxt) qiniuUpload(filename string, ext string) (string, error) {
 }
 
 func (c *ctxt) s3Upload(filename string, ext string) (string, error) {
-	awsCfg, err := config.LoadDefaultConfig(context.TODO(),
-		config.WithRegion(S3Config.Region),
-		config.WithCredentialsProvider(awsCreds.NewStaticCredentialsProvider(S3Config.AccessKeyID, S3Config.SecretAccessKey, "")),
-	)
-	if err != nil {
-		return "", err
-	}
+    awsCfg, err := config.LoadDefaultConfig(context.TODO(),
+        config.WithRegion(S3Config.Region),
+        config.WithCredentialsProvider(
+            awsCreds.NewStaticCredentialsProvider(
+                S3Config.AccessKeyID,
+                S3Config.SecretAccessKey,
+                "",
+            ),
+        ),
+    )
+    if err != nil {
+        return "", err
+    }
 
-	var client *s3.Client
-	// 兼容自定义端点
-	if S3Config.EndpointURL != "" {
-		client = s3.NewFromConfig(awsCfg, func(o *s3.Options) {
-			o.BaseEndpoint = &S3Config.EndpointURL
-			o.UsePathStyle = true
-		})
-	} else {
-		client = s3.NewFromConfig(awsCfg)
-	}
-	key := fmt.Sprintf("alisten/%s.%s", c.bvId, ext)
-	file, err := os.Open(filename)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-	_, err = client.PutObject(context.TODO(), &s3.PutObjectInput{
-		Bucket: &S3Config.Bucket,
-		Key:    &key,
-		Body:   file,
-	})
-	if err != nil {
-		return "", err
-	}
-	var url string
-	if S3Config.EndpointURL != "" {
-		url = fmt.Sprintf("%s/%s/%s", S3Config.EndpointURL, S3Config.Bucket, key)
-	} else {
-		url = fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", S3Config.Bucket, S3Config.Region, key)
-	}
-	return url, nil
+    var client *s3.Client
+	// 兼容 minio
+    if S3Config.EndpointURL != "" {
+        client = s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+            o.BaseEndpoint = &S3Config.EndpointURL
+            o.UsePathStyle = true
+        })
+    } else {
+        client = s3.NewFromConfig(awsCfg)
+    }
+
+    key := fmt.Sprintf("alisten/%s.%s", c.bvId, ext)
+
+    file, err := os.Open(filename)
+    if err != nil {
+        return "", err
+    }
+    defer file.Close()
+
+    // 使用 Multipart 上传，设置分片大小 <= 16MB
+    uploader := manager.NewUploader(client, func(u *manager.Uploader) {
+        u.PartSize = 16 * 1024 * 1024 // 16 MiB
+    })
+
+    _, err = uploader.Upload(context.TODO(), &s3.PutObjectInput{
+        Bucket: &S3Config.Bucket,
+        Key:    &key,
+        Body:   file,
+    })
+    if err != nil {
+        return "", err
+    }
+
+    var url string
+    if S3Config.EndpointURL != "" {
+        url = fmt.Sprintf("%s/%s/%s", S3Config.EndpointURL, S3Config.Bucket, key)
+    } else {
+        url = fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", S3Config.Bucket, S3Config.Region, key)
+    }
+
+    return url, nil
 }
 
 // 下载媒体文件
