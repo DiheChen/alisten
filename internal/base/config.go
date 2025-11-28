@@ -1,10 +1,10 @@
 package base
 
 import (
+	"encoding/json"
 	"os"
 	"reflect"
-
-	"github.com/tidwall/gjson"
+	"strings"
 )
 
 type H = map[string]any
@@ -27,10 +27,13 @@ type PersistHouse struct {
 	Password string `json:"password"`
 }
 
-func InitConfig() {
-	file, _ := os.ReadFile("config.json")
-	g := gjson.Parse(string(file))
+func envKeyFromTag(tag string) string {
+	// "music.cookie" => "ALISTEN_MUSIC_COOKIE"
+	key := strings.ToUpper(strings.ReplaceAll(tag, ".", "_"))
+	return "ALISTEN_" + key
+}
 
+func InitConfig() {
 	var (
 		v                     = reflect.ValueOf(&Config).Elem()
 		t                     = v.Type()
@@ -38,36 +41,39 @@ func InitConfig() {
 		boolType              = reflect.TypeOf(true)
 		slicePersistHouseType = reflect.TypeOf([]PersistHouse{})
 	)
+
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
-		name := field.Tag.Get("config")
-		if name == "" {
+		tag := field.Tag.Get("config")
+		if tag == "" {
 			continue
 		}
+
+		envKey := envKeyFromTag(tag)
+		raw := os.Getenv(envKey)
+		if raw == "" {
+			continue
+		}
+
 		switch field.Type {
 		case stringType:
-			v.Field(i).SetString(g.Get(name).String())
+			v.Field(i).SetString(raw)
+
 		case boolType:
-			v.Field(i).SetBool(g.Get(name).Bool())
+			if raw == "true" || raw == "1" {
+				v.Field(i).SetBool(true)
+			} else {
+				v.Field(i).SetBool(false)
+			}
+
 		case slicePersistHouseType:
-			// 处理 persist 字段
-			persistData := g.Get(name)
-			if persistData.Exists() && persistData.IsArray() {
-				var houses []PersistHouse
-				persistData.ForEach(func(key, value gjson.Result) bool {
-					house := PersistHouse{
-						ID:       value.Get("id").String(),
-						Name:     value.Get("name").String(),
-						Desc:     value.Get("desc").String(),
-						Password: value.Get("password").String(),
-					}
-					houses = append(houses, house)
-					return true
-				})
+			var houses []PersistHouse
+			if err := json.Unmarshal([]byte(raw), &houses); err == nil {
 				v.Field(i).Set(reflect.ValueOf(houses))
 			}
+
 		default:
-			panic("unsupported type")
+			panic("unsupported type: " + field.Type.String())
 		}
 	}
 }
