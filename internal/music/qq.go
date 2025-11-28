@@ -4,18 +4,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"github.com/tidwall/gjson"
 
 	"github.com/bihua-university/alisten/internal/base"
-	"github.com/bihua-university/alisten/internal/music/kuwo"
 )
-
-var kuwoClient = kuwo.NewClient()
 
 func QQPost(u string, k H) gjson.Result {
 	marshal, err := json.Marshal(k)
@@ -51,7 +48,22 @@ func Get(u string, k url.Values) gjson.Result {
 		return gjson.Result{}
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 Edg/135.0.0.0")
-	response, err := kuwo.HttpClient.Do(req)
+	response, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return gjson.Result{}
+	}
+	defer response.Body.Close()
+
+	all, err := io.ReadAll(response.Body)
+	if err != nil {
+		return gjson.Result{}
+	}
+
+	return gjson.ParseBytes(all)
+}
+
+func Post(u string, k url.Values) gjson.Result {
+	response, err := http.PostForm(u, k)
 	if err != nil {
 		return gjson.Result{}
 	}
@@ -67,6 +79,10 @@ func Get(u string, k url.Values) gjson.Result {
 
 func QQGet(u string, k url.Values) gjson.Result {
 	return Get(base.Config.QQAPI+u, k)
+}
+
+func crc(data string) string {
+	return fmt.Sprintf("%X", crc32.ChecksumIEEE([]byte(data)))
 }
 
 func GetQQMusicResult(r gjson.Result, o SearchOption) SearchResult[Music] {
@@ -120,18 +136,24 @@ func getQQMusic(id string) H {
 		return true
 	})
 
-	resp := kuwoClient.SearchMusic(0, 10, name+" "+artist)
-	var rid string
-	if len(resp.Abslist) > 0 {
-		rid = strings.TrimPrefix(resp.Abslist[0].MUSICRID, "MUSIC_")
-	}
+	key := artist + " " + name
+	search := Post("https://music-api.gdstudio.xyz/api.php", url.Values{
+		"types":  []string{"search"},
+		"source": []string{"kuwo"},
+		"name":   []string{key},
+		"page":   []string{"1"},
+		"count":  []string{"20"},
+		"s":      []string{crc(key)},
+	})
+	rid := search.Get("0.id").String()
 
 	// other api: https://api.limeasy.cn/kwmpro/v1/
-	download := Get("https://music-api.gdstudio.xyz/api.php", url.Values{
+	download := Post("https://music-api.gdstudio.xyz/api.php", url.Values{
 		"types":  []string{"url"},
 		"source": []string{"kuwo"},
 		"id":     []string{rid},
 		"br":     []string{"320"},
+		"s":      []string{crc(rid)},
 	})
 
 	ablumMid := detail.Get("album.mid").String()
