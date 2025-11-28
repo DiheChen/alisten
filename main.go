@@ -135,7 +135,7 @@ func main() {
 		createHouse(house.ID, house.Name, house.Desc, house.Password, true)
 	}
 
-	log.Fatal(http.ListenAndServe(":8080", handler))
+	log.Fatal(http.ListenAndServe(base.Config.Addr, handler))
 }
 
 var route = map[string]func(ctx *Context){
