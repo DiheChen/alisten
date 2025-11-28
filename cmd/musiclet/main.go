@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/bihua-university/alisten/cmd/musiclet/bihua"
 	"github.com/bihua-university/alisten/cmd/musiclet/bilibili"
@@ -42,28 +43,42 @@ type Config struct {
 	Pgsql     string        `json:"pgsql"`
 }
 
+func envKeyFromTag(tag string) string {
+	key := strings.ToUpper(strings.ReplaceAll(tag, ".", "_"))
+	return "MUSICLET_" + key
+}
+
 // loadConfig 读取配置文件
-func loadConfig(configPath string) (*Config, error) {
-	log.Printf("尝试读取配置文件: %s", configPath)
-
-	file, err := os.Open(configPath)
-	if err != nil {
-		log.Printf("无法打开配置文件 %s: %v", configPath, err)
-		return nil, fmt.Errorf("无法打开配置文件: %v", err)
-	}
-	defer file.Close()
-
-	var config Config
-	decoder := json.NewDecoder(file)
-	err = decoder.Decode(&config)
-	if err != nil {
-		log.Printf("解析配置文件失败: %v", err)
-		return nil, fmt.Errorf("解析配置文件失败: %v", err)
+func loadConfig(_ string) (*Config, error) {
+	getEnv := func(tag string) string {
+		val := os.Getenv(envKeyFromTag(tag))
+		return val
 	}
 
-	log.Printf("配置文件解析成功: ServerURL=%s, Token长度=%d",
-		config.ServerURL, len(config.Token))
-	return &config, nil
+	config := &Config{
+		ServerURL: getEnv("server_url"),
+		Token:     getEnv("token"),
+		Pgsql:     getEnv("pgsql"),
+		Storage: StorageConfig{
+			Type: getEnv("storage.type"),
+			Qiniu: QiniuConfig{
+				Ak:     getEnv("storage.qiniu.ak"),
+				Sk:     getEnv("storage.qiniu.sk"),
+				Bucket: getEnv("storage.qiniu.bucket"),
+				Domain: getEnv("storage.qiniu.domain"),
+			},
+			S3: S3Config{
+				AccessKeyID:     getEnv("storage.s3.access_key_id"),
+				SecretAccessKey: getEnv("storage.s3.secret_access_key"),
+				Region:          getEnv("storage.s3.region"),
+				Bucket:          getEnv("storage.s3.bucket"),
+				EndpointURL:     getEnv("storage.s3.endpoint_url"),
+			},
+		},
+	}
+
+	log.Printf("配置加载完成: ServerURL=%s, Token长度=%d", config.ServerURL, len(config.Token))
+	return config, nil
 }
 
 func main() {
