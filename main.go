@@ -91,25 +91,42 @@ func main() {
 		conn.Start()
 		house.enter(conn)
 
+		const pongWait = 60 * time.Second
+		wc.SetReadDeadline(time.Now().Add(pongWait))
+		wc.SetPongHandler(func(appData string) error {
+			house.lastActiveTime = time.Now()
+			wc.SetReadDeadline(time.Now().Add(pongWait))
+			return nil
+		})
+
+		go func() {
+			ticker := time.NewTicker(pongWait / 2)
+			defer ticker.Stop()
+			for range ticker.C {
+				if err := wc.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(10*time.Second)); err != nil {
+					log.Println("ping error:", err)
+					return
+				}
+			}
+		}()
+
 		for {
 			_, message, err := wc.ReadMessage()
 			if err != nil {
 				log.Println("read:", err)
-				// remove from connections and broadcast updated user list
 				house.Leave(conn)
 				break
 			}
 
 			// async handle command
-			go func() {
+			go func(msgBytes []byte) {
 				defer func() {
-					// prevent crash
 					if err := recover(); err != nil {
 						log.Println(err, "\n", string(debug.Stack()))
 					}
 				}()
 
-				msg := gjson.ParseBytes(message)
+				msg := gjson.ParseBytes(msgBytes)
 				handler := route[msg.Get("action").String()]
 
 				if base.Config.Debug {
@@ -124,9 +141,9 @@ func main() {
 					}
 					handler(c)
 				} else {
-					log.Printf("unhandled message: %s", message)
+					log.Printf("unhandled message: %s", msgBytes)
 				}
-			}()
+			}(message)
 		}
 	})
 
