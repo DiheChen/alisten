@@ -12,6 +12,9 @@ Dockerfile*
 docker-compose*.yml
 .dockerignore
 
+# k8s files
+k8s/
+
 # Development files
 .vscode
 .idea
