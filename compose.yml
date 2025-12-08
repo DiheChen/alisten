@@ -6,7 +6,7 @@ services:
       ALISTEN_ADDR: ":8080"
       ALISTEN_TOKEN: "${APP_TOKEN}"
       ALISTEN_MUSIC_NETEASE: "http://jusic-music-api:3000"
-      ALISTEN_MUSIC_COOKIE: ""
+      ALISTEN_MUSIC_COOKIE: ${ALISTEN_MUSIC_COOKIE}
       ALISTEN_MUSIC_QQ: "http://jusic-music-api:3300"
       ALISTEN_DEBUG: "true"
       ALISTEN_PGSQL: "postgresql://${DB_USER}:${DB_PASSWORD}@postgresql:5432/${DB_NAME}"
