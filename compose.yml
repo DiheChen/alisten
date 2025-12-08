@@ -1,42 +1,157 @@
 services:
-  # Alisten 服务
   alisten:
-    image: ghcr.io/bihua-university/alisten:latest
+    image: dihechen/alisten:latest
     container_name: alisten
-    volumes:
-      - ./config.json:/app/config.json:ro
-    restart: unless-stopped
     environment:
-      - TZ=Asia/Shanghai
-    ports:
-      - "8080:8080"
+      ALISTEN_ADDR: ":8080"
+      ALISTEN_TOKEN: "${APP_TOKEN}"
+      ALISTEN_MUSIC_NETEASE: "http://jusic-music-api:3000"
+      ALISTEN_MUSIC_COOKIE: ""
+      ALISTEN_MUSIC_QQ: "http://jusic-music-api:3300"
+      ALISTEN_DEBUG: "true"
+      ALISTEN_PGSQL: "postgresql://${DB_USER}:${DB_PASSWORD}@postgresql:5432/${DB_NAME}"
+      ALISTEN_PERSIST: ${ALISTEN_PERSIST}
     networks:
       - alisten-network
+      - proxy
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.alisten.rule=Host(`alisten.${DOMAIN_NAME}`)"
+      - "traefik.http.routers.alisten.service=alisten"
+      - "traefik.http.routers.alisten.entrypoints=websecure"
+      - "traefik.http.routers.alisten.tls=true"
+      - "traefik.http.routers.alisten.tls.certresolver=resolver"
+      - "traefik.http.routers.alisten.middlewares=hsts@docker"
+      - "traefik.http.services.alisten.loadbalancer.server.port=8080"
+    depends_on:
+      - postgresql
+      - jusic-music-api
 
-  # Musiclet 工作服务
   musiclet:
-    image: ghcr.io/bihua-university/alisten-musiclet:latest
-    container_name: alisten-musiclet
-    volumes:
-      - ./musiclet-config.json:/app/config.json:ro
+    image: dihechen/musiclet:latest
+    container_name: musiclet
+    environment:
+      MUSICLET_SERVER_URL: "http://alisten:8080"
+      MUSICLET_PGSQL: "postgresql://${DB_USER}:${DB_PASSWORD}@postgresql:5432/${DB_NAME}"
+      MUSICLET_TOKEN: "${APP_TOKEN}"
+      MUSICLET_STORAGE_TYPE: "s3"
+      MUSICLET_STORAGE_S3_ACCESS_KEY_ID: "${S3_ACCESS_KEY}"
+      MUSICLET_STORAGE_S3_SECRET_ACCESS_KEY: "${S3_SECRET_KEY}"
+      MUSICLET_STORAGE_S3_REGION: "us-east-1"
+      MUSICLET_STORAGE_S3_BUCKET: "${S3_BUCKET}"
+      MUSICLET_STORAGE_S3_ENDPOINT_URL: "https://oss.${DOMAIN_NAME}"
+    networks:
+      - alisten-network
+    restart: unless-stopped
+    depends_on:
+      - alisten
+      - postgresql
+      - rustfs
+
+  jusic-music-api:
+    image: jumpalang/jusic_music_api:2.1
+    container_name: jusic-music-api
     restart: unless-stopped
     environment:
       - TZ=Asia/Shanghai
     networks:
       - alisten-network
 
-  # Musiclet-py 工作服务
-  musiclet-py:
-    image: musiclet-py:latest
-    container_name: alisten-musiclet-py
-    volumes:
-      - ./musiclet-config.json:/app/config.json:ro
+  postgresql:
+    image: postgres:17.6-alpine3.22
+    container_name: postgresql
     restart: unless-stopped
     environment:
-      - TZ=Asia/Shanghai
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     networks:
       - alisten-network
+
+  rustfs:
+    security_opt:
+      - "no-new-privileges:true"
+    image: rustfs/rustfs:latest
+    container_name: rustfs-server
+    environment:
+      - RUSTFS_VOLUMES=/data/rustfs{1...4}
+      - RUSTFS_ADDRESS=0.0.0.0:9000
+      - RUSTFS_CONSOLE_ADDRESS=0.0.0.0:9001
+      - RUSTFS_CONSOLE_ENABLE=true
+      - RUSTFS_EXTERNAL_ADDRESS=:9000
+      - RUSTFS_CORS_ALLOWED_ORIGINS=*
+      - RUSTFS_CONSOLE_CORS_ALLOWED_ORIGINS=*
+      - RUSTFS_ACCESS_KEY=${S3_ACCESS_KEY}
+      - RUSTFS_SECRET_KEY=${S3_SECRET_KEY}
+      - RUSTFS_OBS_LOGGER_LEVEL=info
+    volumes:
+      - ./rustfs-data:/data
+      - ./rustfs-logs:/app/logs
+    networks:
+      - alisten-network
+      - proxy
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "sh", "-c",
+          "curl -f http://localhost:9000/health && curl -f http://localhost:9001/rustfs/console/health"
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.rustfs.rule=Host(`oss.${DOMAIN_NAME}`)"
+      - "traefik.http.routers.rustfs.service=rustfs"
+      - "traefik.http.routers.rustfs.entrypoints=websecure"
+      - "traefik.http.routers.rustfs.tls=true"
+      - "traefik.http.routers.rustfs.tls.certresolver=resolver"
+      - "traefik.http.routers.rustfs.middlewares=hsts@docker"
+      - "traefik.http.services.rustfs.loadbalancer.server.port=9000"
+
+  traefik:
+    image: "traefik:v3.6.2"
+    container_name: "traefik"
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "./letsencrypt:/letsencrypt"
+    command:
+      - "--api.insecure=false"
+      - "--api.dashboard=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=proxy"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.resolver.acme.tlschallenge=true"
+      - "--certificatesresolvers.resolver.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.resolver.acme.storage=/letsencrypt/acme.json"
+    labels:
+      - "traefik.http.middlewares.hsts.headers.stsSeconds=63072000"
+      - "traefik.http.middlewares.hsts.headers.stsIncludeSubdomains=true"
+      - "traefik.http.middlewares.hsts.headers.stsPreload=true"
 
 networks:
+  proxy:
+    name: proxy
   alisten-network:
-    driver: bridge
+    name: alisten-network
+
+volumes:
+  postgres_data:
