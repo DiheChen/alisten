@@ -345,8 +345,10 @@ func (h *House) Skip(force bool) {
 			}
 			// recommend a music
 			list := h.recommander.Recommend(nil)
-			choose := rand.IntN(len(list))
-			h.Playlist = append(h.Playlist, Order{source: "wy", id: list[choose], user: auth.User{Name: "系统推荐"}})
+			if len(list) > 0 {
+				choose := rand.IntN(len(list))
+				h.Playlist = append(h.Playlist, Order{source: "wy", id: list[choose], user: auth.User{Name: "系统推荐"}})
+			}
 		})
 		h.PushPlaylist()
 	}
